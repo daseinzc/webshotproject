@@ -11,6 +11,16 @@ from rest_framework.authentication import TokenAuthentication
 from rest_framework.permissions import IsAuthenticated
 import random
 from rest_framework.views import APIView
+from django.db import transaction # 用于事务
+from django.db.models import Sum  # <--- 必须加，否则无法计算总和
+from django.db import transaction # <--- 必须加，否则无法做原子操作
+from .models import UserProfile, Transaction  # <--- 必须加 Transaction
+from .serializers import (
+    RegisterSerializer, 
+    UserProfileSerializer, 
+    TransactionSerializer  # <--- 必须加 TransactionSerializer
+)
+
 # 或者简单的 Session 登录，但小程序建议用 JWT 或 Token。这里先演示标准流程。
 
 # === 1. 注册接口 (对应 register.js) ===
@@ -159,3 +169,93 @@ class ChangePasswordView(APIView):
         user.save()
 
         return Response({'msg': '密码修改成功', 'code': 200})
+    
+# === 5. 钱包首页接口：获取余额、统计和流水 ===
+class WalletInfoView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        
+        # === 修复逻辑：获取或创建 ===
+        try:
+            profile = user.profile
+        except UserProfile.DoesNotExist:
+            # 老用户没有档案，自动初始化
+            profile = UserProfile.objects.create(user=user, balance=10000)
+        # ==========================
+
+        # 下面的代码保持不变...
+        income = Transaction.objects.filter(user=user, trans_type='income').aggregate(s=Sum('amount'))['s'] or 0
+        expense = Transaction.objects.filter(user=user, trans_type='expense').aggregate(s=Sum('amount'))['s'] or 0
+
+        trans_qs = Transaction.objects.filter(user=user).order_by('-created_at')[:20]
+        serializer = TransactionSerializer(trans_qs, many=True)
+
+        return Response({
+            'code': 200,
+            'data': {
+                'total_balance': profile.balance,
+                'total_income': income,
+                'total_expense': expense,
+                'list': serializer.data 
+            }
+        })
+
+# === 6. 充值接口：执行加钱逻辑 ===
+class RechargeView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        price = request.data.get('price')
+
+        # 1. 基础校验
+        if not price:
+            return Response({'msg': '参数错误'}, status=400)
+        try:
+            price_val = float(price)
+            if price_val <= 0: raise ValueError
+        except:
+            return Response({'msg': '金额无效'}, status=400)
+
+        points = int(price_val * 100)
+
+        try:
+            with transaction.atomic():
+                # 尝试获取 Profile，如果是老用户没有Profile，则自动创建
+                # select_for_update 在 get_or_create 中使用需要注意，这里为了稳健我们拆开写
+                
+                try:
+                    # 尝试带锁查询（针对有账号的人）
+                    profile = UserProfile.objects.select_for_update().get(user=user)
+                except UserProfile.DoesNotExist:
+                    # 如果报错说找不到，说明是老账号，立刻创建一个补救
+                    # 默认余额在 models.py 里已经是 10000 了，这里不用特意指定，或者指定也行
+                    profile = UserProfile.objects.create(
+                        user=user, 
+                        balance=10000, 
+                        nickname=user.username  # 默认用账号名做昵称
+                    )
+                    print(f"检测到老用户 {user.username} 无档案，已自动补全")
+                
+
+                # 2. 执行充值 (在现有余额基础上增加)
+                profile.balance += points
+                profile.save()
+
+                # 3. 写入流水
+                Transaction.objects.create(
+                    user=user,
+                    title='账户充值',
+                    amount=points,
+                    trans_type='income'
+                )
+
+        except Exception as e:
+            print(f"充值报错: {e}")
+            return Response({'msg': '系统繁忙，请重试'}, status=500)
+
+        return Response({'code': 200, 'msg': '充值成功', 'new_balance': profile.balance})
