@@ -9,7 +9,7 @@ https://docs.djangoproject.com/en/5.2/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
-
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -123,3 +123,33 @@ STATIC_URL = "static/"
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+
+
+# 【方案 A：开发阶段 / 华为云本地存储】
+# ------------------------------------------------
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+}
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+
+# 【方案 B：上线阶段 / Cloudflare R2】(目前先注释掉，上线时解开)
+# ------------------------------------------------
+# INSTALLED_APPS += ['storages'] # 记得在 APP 列表里加这个
+# AWS_ACCESS_KEY_ID = 'xxx'
+# AWS_SECRET_ACCESS_KEY = 'xxx'
+# AWS_STORAGE_BUCKET_NAME = 'xxx'
+# AWS_S3_ENDPOINT_URL = 'https://xxx.r2.cloudflarestorage.com'
+# AWS_S3_CUSTOM_DOMAIN = 'media.yourdomain.com'
+# STORAGES = {
+#     "default": {"BACKEND": "storages.backends.s3.S3Storage", ...},
+#     "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+# }
+

@@ -273,3 +273,75 @@ class MyTasksView(APIView):
             
         serializer = TaskSerializer(tasks, many=True, context={'request': request})
         return Response({'code': 200, 'data': serializer.data})
+    
+
+
+class UploadVideoView(APIView):
+    """拍客上传视频接口"""
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        user = request.user
+        video_file = request.FILES.get('video')  # 获取前端传来的视频文件
+        
+        if not video_file:
+            return Response({'code': 400, 'msg': '请上传视频文件'})
+
+        with transaction.atomic():
+            try:
+                task = Task.objects.select_for_update().get(id=pk)
+            except Task.DoesNotExist:
+                return Response({'code': 404, 'msg': '任务不存在'})
+
+            if task.worker != user:
+                return Response({'code': 403, 'msg': '无权操作此任务'})
+            if task.status != 'ongoing':
+                return Response({'code': 400, 'msg': '任务不在进行中，无法上传'})
+
+            # 保存视频，状态保持 ongoing，等待发布者验收
+            task.result_video = video_file
+            task.save()
+
+        return Response({'code': 200, 'msg': '上传成功，等待发布者验收', 'video_url': task.result_video.url})
+
+
+class AcceptTaskView(APIView):
+    """发布者确认验收并结算接口"""
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        user = request.user
+
+        with transaction.atomic():
+            try:
+                task = Task.objects.select_for_update().get(id=pk)
+            except Task.DoesNotExist:
+                return Response({'code': 404, 'msg': '任务不存在'})
+
+            if task.publisher != user:
+                return Response({'code': 403, 'msg': '无权操作此任务'})
+            if task.status != 'ongoing':
+                return Response({'code': 400, 'msg': '任务不在进行中或已验收'})
+            if not task.result_video:
+                return Response({'code': 400, 'msg': '拍客尚未上传视频，无法验收'})
+
+            # 1. 改变任务状态为已完成
+            task.status = 'completed'
+            task.save()
+
+            # 2. 给接单者(拍客)结算积分
+            worker_profile = UserProfile.objects.select_for_update().get(user=task.worker)
+            worker_profile.balance += task.price
+            worker_profile.save()
+
+            # 3. 记录接单者的收入流水
+            Transaction.objects.create(
+                user=task.worker,
+                title=f"完成任务验收收益-{task.title}",
+                amount=task.price,
+                trans_type='income'
+            )
+
+        return Response({'code': 200, 'msg': '验收成功，积分已结算'})

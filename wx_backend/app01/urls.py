@@ -25,4 +25,8 @@ urlpatterns = [
     path('tasks/my/', views.MyTasksView.as_view(), name='my_tasks'),
     
     path('tasks/publish/', views.PublishTaskView.as_view(), name='task_publish'),
+    
+    path('tasks/<int:pk>/upload/', views.UploadVideoView.as_view(), name='upload_video'),
+    path('tasks/<int:pk>/accept/', views.AcceptTaskView.as_view(), name='accept_task'),
+
 ]
